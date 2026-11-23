@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ from esm2_ood.baselines import AA44RidgeBaseline, SiteMeanBaseline
 from esm2_ood.manifest import build_core_task_manifest
 from esm2_ood.metrics import compute_mse, compute_precision_at_k_and_ef, compute_spearman
 from esm2_ood.splits import get_outer_split, load_panel_dms, sample_budget_split
+from export_wave1_baselines import RANKING_COLUMNS, export_report, heldout_site_mean
 
 ROOT = Path(__file__).resolve().parents[1]
 CV_DIR = ROOT / "data" / "cv_folds"
@@ -37,6 +39,12 @@ def check_memory_sentinel() -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--export-only", type=Path, metavar="DIRECTORY")
+    args = parser.parse_args()
+    if args.export_only is not None:
+        export_report(args.export_only)
+        return
     check_memory_sentinel()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest = build_core_task_manifest(PANEL_JSON)
@@ -131,11 +139,14 @@ def main() -> None:
     print(macro.to_string(index=False))
 
     # Also print OXDA_RHOTO Q3 screening comparison at N=256
-    oxda = w1[w1["dms_id"] == "OXDA_RHOTO_Vanella_2023_activity"].groupby(
-        ["split_scheme", "method"], as_index=False
-    )[["spearman", "precision_at_10", "ef_at_10pct"]].mean()
+    oxda = w1[w1["dms_id"] == "OXDA_RHOTO_Vanella_2023_activity"]
+    groups = ["split_scheme", "method"]
+    restricted = heldout_site_mean(oxda)
     print("\n=== OXDA_RHOTO CPU Baselines (N=256, 5-fold mean) ===")
-    print(oxda.to_string(index=False))
+    print(oxda.loc[~restricted].groupby(groups)[["spearman", *RANKING_COLUMNS]].mean().to_string())
+    print(oxda.loc[restricted].groupby(groups).agg(
+        mse=("mse", "mean"), spearman_status=("spearman_status", "first")
+    ).to_string())
 
 
 if __name__ == "__main__":

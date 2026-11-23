@@ -1,15 +1,16 @@
 """Wave 1 Colab L4 LoRA runner: 10 proteins x 3 splits x 5 folds (N=256, seed=42).
 
-Runs `lora_llr` and/or `lora_linear_head` per task with atomic per-task JSON checkpointing
-so interrupted batches resume seamlessly without recomputing completed folds.
+Runs each fold with validated prediction Parquet followed by its JSON checkpoint.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
+import subprocess
 import time
 import urllib.request
 import zipfile
@@ -19,8 +20,10 @@ from esm2_ood.colab_gpu import (
     train_eval_esm2_lora_linear_head,
     train_eval_esm2_lora_llr,
 )
+from esm2_ood.io_utils import sha256_file
 from esm2_ood.manifest import build_core_task_manifest
 from esm2_ood.metrics import compute_precision_at_k_and_ef
+from esm2_ood.predictions import frozen_test_rows, read_predictions, write_predictions
 from esm2_ood.splits import get_outer_split, load_panel_dms, sample_budget_split
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -77,6 +80,7 @@ def main() -> None:
     )
     parser.add_argument("--model-size", default="650M")
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--git-commit", help="Base Git commit of a transferred source snapshot.")
     args = parser.parse_args()
 
     out_dir = args.out_dir or (args.work_dir / "outputs")
@@ -98,7 +102,27 @@ def main() -> None:
         print("No matching tasks in manifest. Exiting.", flush=True)
         return
 
+    git_commit = args.git_commit or subprocess.check_output(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], text=True
+    ).strip()
+    frozen_manifest = REPO_ROOT / "configs" / "data_manifest.json"
+    expected_hashes = {
+        item["dms_id"]: item["sha256"]
+        for item in json.loads(frozen_manifest.read_text(encoding="utf-8"))["panel_10"]
+    }
+    source_files = [pathlib.Path(__file__), *sorted((REPO_ROOT / "src" / "esm2_ood").glob("*.py"))]
+    config = {
+        "model_size": args.model_size, "batch_size": args.batch_size,
+        "frozen_data": sha256_file(frozen_manifest),
+        "panel": sha256_file(REPO_ROOT / "configs" / "panel_10.json"),
+        "source": {f.name: sha256_file(f) for f in source_files},
+    }
+    config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
     ref_df, cv_dir = stage_data(args.work_dir, panel_ids)
+    for dms_id in panel_ids:
+        assert sha256_file(cv_dir / f"{dms_id}.csv") == expected_hashes[dms_id], (
+            f"CV data differs from the frozen manifest: {dms_id}"
+        )
     dms_cache = {dms_id: load_panel_dms(dms_id, cv_dir) for dms_id in panel_ids}
 
     total_jobs = len(w1) * len(args.methods)
@@ -116,8 +140,23 @@ def main() -> None:
         for method in args.methods:
             done_jobs += 1
             rec_path = rec_dir / f"{row.task_id}__{method}.json"
+            prediction_path = rec_path.with_suffix(".parquet")
+            model_id = f"{method}:{args.model_size}"
+            frozen = frozen_test_rows(
+                te_pool, dms_id=row.dms_id, split=row.split_scheme, fold=int(row.test_fold),
+                seed=int(row.seed), model_id=model_id,
+            )
             if rec_path.exists():
-                print(f"[{done_jobs}/{total_jobs}] SKIP {row.task_id} ({method}) - already exists", flush=True)
+                prior = json.loads(rec_path.read_text(encoding="utf-8"))
+                assert prior["task_id"] == row.task_id and prior["method"] == method
+                assert prior["model_size"] == args.model_size
+                status = "legacy metrics only"
+                if "prediction_sha256" in prior:
+                    assert prior["config_hash"] == config_hash, "Checkpoint configuration changed"
+                    assert sha256_file(prediction_path) == prior["prediction_sha256"]
+                    read_predictions(prediction_path, frozen, config_hash=config_hash, git_commit=prior["git_commit"])
+                    status = "prediction verified"
+                print(f"[{done_jobs}/{total_jobs}] SKIP {row.task_id} ({method}) - {status}", flush=True)
                 continue
 
             fn = train_eval_esm2_lora_llr if method == "lora_llr" else train_eval_esm2_lora_linear_head
@@ -131,6 +170,14 @@ def main() -> None:
                 seed=row.seed,
                 device="cuda",
             )
+            evaluated = frozen_test_rows(
+                te_df, dms_id=row.dms_id, split=row.split_scheme, fold=int(row.test_fold),
+                seed=int(row.seed), model_id=model_id,
+            )
+            assert evaluated.equals(frozen), "Evaluation rows differ from the frozen test fold"
+            write_predictions(
+                prediction_path, frozen, res["test_pred"], config_hash=config_hash, git_commit=git_commit
+            )
             p10 = compute_precision_at_k_and_ef(y_te, res["test_pred"], k=10, elite_frac=0.10)
             record = {
                 "task_id": row.task_id,
@@ -142,6 +189,9 @@ def main() -> None:
                 "seed": int(row.seed),
                 "method": method,
                 "model_size": args.model_size,
+                "config_hash": config_hash,
+                "git_commit": git_commit,
+                "prediction_sha256": sha256_file(prediction_path),
                 "spearman": float(res["test_spearman"]) if res["test_spearman"] is not None else None,
                 "spearman_status": "NA (constant)" if res["test_spearman"] is None else "ok",
                 "mse": float(res["test_mse"]),

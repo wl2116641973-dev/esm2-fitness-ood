@@ -17,10 +17,16 @@ PROTEINS="$*"
 COLAB="/home/eva/.local/bin/colab"
 SESSION="w1_${BATCH_NAME}"
 GPU_TYPE="L4"
-MAX_WALL_SEC=2100   # 35-minute hard wall-clock limit per batch
+MAX_WALL_SEC=2400   # 40-minute hard wall-clock limit per batch
 POLL_SEC=30
-OUT_LOCAL_DIR="/mnt/d/Antigravity/projects/esm2-fitness-ood/outputs/wave1_lora"
-mkdir -p "$OUT_LOCAL_DIR/records"
+REPO_LOCAL=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd) || exit 1
+OUT_LOCAL_DIR="${WAVE1_OUT_DIR:-$REPO_LOCAL/outputs/wave1_lora}"
+mkdir -p "$OUT_LOCAL_DIR/records" || exit 1
+exec 9>"$REPO_LOCAL/outputs/.wave1-lora.lock"
+flock -n 9 || { echo "[Error] Another Wave 1 batch is active."; exit 1; }
+
+ROOT_REMOTE=/content/work/wave1_lora
+START_TS=$(date +%s)
 
 cleanup() {
   echo "=== [Cleanup] Unconditionally stopping session '$SESSION' & sweeping any orphans ==="
@@ -36,22 +42,45 @@ PYEOF
   sleep 2
   echo "=== [Cleanup] Post-flight session & CU verification ==="
   timeout 30 "$COLAB" --auth=oauth2 sessions || true
-  timeout 30 "$COLAB" --auth=oauth2 usage || true
+  local usage
+  if ! usage=$(timeout 30 "$COLAB" --auth=oauth2 usage) || [[ "$usage" != *"Active assignments: 0"* || "$usage" != *"Usage rate: 0.00/hr"* ]]; then
+    echo "[Error] GPU release is unverified: $usage"
+    exit 1
+  fi
+  echo "$usage"
+  if [ -n "${TMP_DIR:-}" ]; then
+    rm -r -- "$TMP_DIR"
+  fi
 }
-trap cleanup EXIT
 
 echo "=== [0/5] Pre-flight check (no orphan sessions & starting CU) ==="
-timeout 30 "$COLAB" --auth=oauth2 sessions
-timeout 30 "$COLAB" --auth=oauth2 usage
+timeout 30 "$COLAB" --auth=oauth2 sessions || exit 1
+USAGE=$(timeout 30 "$COLAB" --auth=oauth2 usage) || exit 1
+echo "$USAGE"
+if [[ "$USAGE" != *"Active assignments: 0"* ]]; then
+  echo "[Error] Existing Colab assignment detected."
+  exit 1
+fi
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+TMP_DIR=$(mktemp -d "$REPO_LOCAL/outputs/.wave1-tmp.XXXXXX") || exit 1
+CODE_COMMIT=$(git -C "$REPO_LOCAL" rev-parse HEAD) || exit 1
+tar -czf "$TMP_DIR/source.tar.gz" -C "$REPO_LOCAL" --exclude='__pycache__' \
+  configs src/esm2_ood pyproject.toml README.md \
+  scripts/run_wave1_lora_colab.py scripts/sync_wave1_lora_archive.py || exit 1
+SOURCE_SUM=$(sha256sum "$TMP_DIR/source.tar.gz") || exit 1
+PYTHONPATH="$REPO_LOCAL/src" python3 -B "$REPO_LOCAL/scripts/sync_wave1_lora_archive.py" \
+  pack "$OUT_LOCAL_DIR/records" "$TMP_DIR/checkpoints.tar.gz" || exit 1
 
 echo "=== [1/5] Provisioning $GPU_TYPE session '$SESSION' (timeout=180s) ==="
-timeout 180 "$COLAB" --auth=oauth2 new -s "$SESSION" --gpu "$GPU_TYPE"
+timeout 180 "$COLAB" --auth=oauth2 new -s "$SESSION" --gpu "$GPU_TYPE" || exit 1
 sleep 4
 
 echo "=== [2/5] Warm-check GPU & kernel responsiveness (max 3 attempts) ==="
 WARM_OK=0
 for attempt in 1 2 3; do
-  if echo "import torch; print('GPU_READY:', torch.cuda.get_device_name(0))" | timeout 35 "$COLAB" --auth=oauth2 exec -s "$SESSION" --timeout 25; then
+  if WARM_OUT=$(echo "import subprocess; print('GPU_READY:', subprocess.check_output(['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'], text=True).strip())" | timeout 30 "$COLAB" --auth=oauth2 exec -s "$SESSION" --timeout 20) && [[ "$WARM_OUT" == *"GPU_READY: NVIDIA L4"* ]]; then
     WARM_OK=1
     break
   fi
@@ -64,50 +93,58 @@ if [ "$WARM_OK" -ne 1 ]; then
 fi
 
 echo "=== [3/5] Launching Wave 1 LoRA batch '$BATCH_NAME' detached (<5s exec) ==="
-cat << PYEOF > /tmp/launch_${BATCH_NAME}.py
+timeout 90 "$COLAB" --auth=oauth2 upload -s "$SESSION" "$TMP_DIR/source.tar.gz" /content/wave1_source.tar.gz || exit 1
+timeout 90 "$COLAB" --auth=oauth2 upload -s "$SESSION" "$TMP_DIR/checkpoints.tar.gz" /content/wave1_checkpoints.tar.gz || exit 1
+cat << PYEOF > "$TMP_DIR/launch.py"
 import subprocess, pathlib
 
 work = pathlib.Path("/content/work/wave1_lora")
 work.mkdir(parents=True, exist_ok=True)
-for f in ("DONE.flag", "FAIL.flag"):
-    (work / f).unlink(missing_ok=True)
+started = work / "STARTED.flag"
+if started.exists():
+    print("LAUNCHED_DETACHED_OK", flush=True)
+    raise SystemExit(0)
 
 runner_sh = work / "run_bg.sh"
 runner_sh.write_text("""#!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 exec > /content/work/wave1_lora/job.log 2>&1
-echo "[START] $(date -u) BATCH=${BATCH_NAME}"
+trap 'rc=\$?; if [ "\$rc" -ne 0 ]; then printf "%s\\n" "\$rc" > "$ROOT_REMOTE/FAIL.tmp"; mv "$ROOT_REMOTE/FAIL.tmp" "$ROOT_REMOTE/FAIL.flag"; fi' EXIT
+echo "[START] BATCH=${BATCH_NAME}"
+mkdir -p "$ROOT_REMOTE/outputs/records" "$ROOT_REMOTE/source"
+echo "${SOURCE_SUM%% *}  /content/wave1_source.tar.gz" | sha256sum -c -
+tar -xzf /content/wave1_source.tar.gz -C "$ROOT_REMOTE/source"
+tar -xzf /content/wave1_checkpoints.tar.gz -C "$ROOT_REMOTE/outputs/records"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 pip uninstall -y -q torchao || true
 pip install -q transformers peft accelerate pyarrow scipy
-if [ ! -d /content/esm2-fitness-ood ]; then
-  git clone https://github.com/wl2116641973-dev/esm2-fitness-ood.git /content/esm2-fitness-ood
-else
-  git -C /content/esm2-fitness-ood pull --ff-only
-fi
-pip install -q --no-deps -e /content/esm2-fitness-ood
-python3 -u /content/esm2-fitness-ood/scripts/run_wave1_lora_colab.py \\
+pip install -q --no-deps -e "$ROOT_REMOTE/source"
+python3 -u "$ROOT_REMOTE/source/scripts/run_wave1_lora_colab.py" \\
+  --git-commit ${CODE_COMMIT} \\
   --work-dir /content/work/wave1_lora \\
   --out-dir /content/work/wave1_lora/outputs \\
   --methods ${METHODS} \\
   --proteins ${PROTEINS}
-RC=\$?
-tar -czf /content/work/wave1_lora_records.tar.gz -C /content/work/wave1_lora/outputs/records . || true
-if [ "\$RC" -eq 0 ]; then
-  echo "OK" > /content/work/wave1_lora/DONE.flag
-else
-  echo "\$RC" > /content/work/wave1_lora/FAIL.flag
-fi
-echo "[END] $(date -u) RC=\$RC"
+echo OK > "$ROOT_REMOTE/DONE.tmp"
+mv "$ROOT_REMOTE/DONE.tmp" "$ROOT_REMOTE/DONE.flag"
 """)
 runner_sh.chmod(0o755)
-subprocess.Popen(["nohup", "bash", str(runner_sh)], start_new_session=True)
+started.touch(exist_ok=False)
+try:
+    subprocess.Popen(
+        ["nohup", "timeout", "${MAX_WALL_SEC}", "bash", str(runner_sh)],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+except OSError:
+    started.unlink()
+    raise
 print("LAUNCHED_DETACHED_OK", flush=True)
 PYEOF
 
 LAUNCH_OK=0
 for attempt in 1 2 3; do
-  if timeout 40 "$COLAB" --auth=oauth2 exec -s "$SESSION" --timeout 30 -f "/tmp/launch_${BATCH_NAME}.py"; then
+  if LAUNCH_OUT=$(timeout 30 "$COLAB" --auth=oauth2 exec -s "$SESSION" --timeout 20 -f "$TMP_DIR/launch.py") && [[ "$LAUNCH_OUT" == *"LAUNCHED_DETACHED_OK"* ]]; then
     LAUNCH_OK=1
     break
   fi
@@ -120,11 +157,10 @@ if [ "$LAUNCH_OK" -ne 1 ]; then
 fi
 
 echo "=== [4/5] Polling detached job (hard limit=${MAX_WALL_SEC}s) ==="
-START_TS=$(date +%s)
 CONSEC_FAIL=0
 STATUS="TIMEOUT"
 
-cat << 'PYEOF' > /tmp/poll_wave1_lora.py
+cat << 'PYEOF' > "$TMP_DIR/poll.py"
 import pathlib
 w = pathlib.Path("/content/work/wave1_lora")
 if (w / "DONE.flag").exists():
@@ -153,7 +189,7 @@ while true; do
   fi
 
   POLL_OUT=""
-  if POLL_OUT=$(timeout 30 "$COLAB" --auth=oauth2 exec -s "$SESSION" --timeout 20 -f /tmp/poll_wave1_lora.py 2>&1); then
+  if POLL_OUT=$(timeout 30 "$COLAB" --auth=oauth2 exec -s "$SESSION" --timeout 20 -f "$TMP_DIR/poll.py" 2>&1) && [[ "$POLL_OUT" == *"STATE:"* ]]; then
     CONSEC_FAIL=0
     echo "--- Poll @ ${ELAPSED}s ---"
     echo "$POLL_OUT"
@@ -177,17 +213,17 @@ while true; do
 done
 
 echo "=== [5/5] Retrieving artifacts (STATUS=$STATUS) ==="
-timeout 90 "$COLAB" --auth=oauth2 download -s "$SESSION" /content/work/wave1_lora/job.log "$OUT_LOCAL_DIR/${BATCH_NAME}_job.log" || true
-if [ "$STATUS" = "WALL_CAP" ]; then
-  echo "import subprocess; subprocess.run(['tar','-czf','/content/work/wave1_lora_records.tar.gz','-C','/content/work/wave1_lora/outputs/records','.'], check=False)" | timeout 30 "$COLAB" --auth=oauth2 exec -s "$SESSION" --timeout 20 || true
-fi
-if [ "$STATUS" = "DONE" ] || [ "$STATUS" = "WALL_CAP" ]; then
-  timeout 120 "$COLAB" --auth=oauth2 download -s "$SESSION" /content/work/wave1_lora_records.tar.gz "$OUT_LOCAL_DIR/${BATCH_NAME}_records.tar.gz" || true
-  if [ -f "$OUT_LOCAL_DIR/${BATCH_NAME}_records.tar.gz" ]; then
-    tar -xzf "$OUT_LOCAL_DIR/${BATCH_NAME}_records.tar.gz" -C "$OUT_LOCAL_DIR/records"
-    rm -f "$OUT_LOCAL_DIR/${BATCH_NAME}_records.tar.gz"
-    echo "[Success] Extracted records for $BATCH_NAME to $OUT_LOCAL_DIR/records"
-  fi
+timeout 90 "$COLAB" --auth=oauth2 download -s "$SESSION" "$ROOT_REMOTE/job.log" "$TMP_DIR/job.log" &&
+  cp -n "$TMP_DIR/job.log" "$OUT_LOCAL_DIR/${BATCH_NAME}_job.log"
+if echo "import subprocess; subprocess.run(['python3', '-B', '$ROOT_REMOTE/source/scripts/sync_wave1_lora_archive.py', 'pack', '$ROOT_REMOTE/outputs/records', '/content/wave1_lora_records.tar.gz'], check=True)" |
+  timeout 30 "$COLAB" --auth=oauth2 exec -s "$SESSION" --timeout 20 &&
+  timeout 90 "$COLAB" --auth=oauth2 download -s "$SESSION" /content/wave1_lora_records.tar.gz "$TMP_DIR/records.tar.gz"; then
+  mkdir -p "$TMP_DIR/records"
+  tar -xzf "$TMP_DIR/records.tar.gz" -C "$TMP_DIR/records" || exit 1
+  PYTHONPATH="$REPO_LOCAL/src" python3 -B "$REPO_LOCAL/scripts/sync_wave1_lora_archive.py" \
+    import "$TMP_DIR/records" "$OUT_LOCAL_DIR/records" || exit 1
+else
+  exit 1
 fi
 if [ "$STATUS" != "DONE" ]; then
   echo "[Warn] Job ended with STATUS=$STATUS. Check $OUT_LOCAL_DIR/${BATCH_NAME}_job.log"

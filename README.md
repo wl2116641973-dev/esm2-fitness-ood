@@ -9,6 +9,11 @@
 - **所有缓存强制隔离至 `D:\Antigravity\cache\`**（`UV_CACHE_DIR`、`UV_PYTHON_INSTALL_DIR`、`PIP_CACHE_DIR`、`HF_HOME`、`MPLCONFIGDIR`）。
 - **GPU 训练与推理统一在 Colab Pro 无状态运行**，仓库体积严格控制在 `< 30 MB`。
 
+## Windows 本地入口
+
+用 `scripts/project.ps1` 启动本地 Python、uv 或其他项目命令。它为子进程设置 D 盘缓存和临时目录。
+使用 `scripts/run_cpu_baselines.py --export-only <新目录>` 从已验收记录生成 Wave 1 报表。
+
 ## 目录结构 / Repository Layout
 
 - `src/esm2_ood/`: 核心数据处理、防泄露切分校验、基线与统计评估模块

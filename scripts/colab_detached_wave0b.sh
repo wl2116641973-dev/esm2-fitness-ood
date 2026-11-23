@@ -66,6 +66,7 @@ set -uo pipefail
 exec > /content/work/wave0b/job.log 2>&1
 echo "[START] $(date -u)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+pip uninstall -y -q torchao || true
 pip install -q transformers peft accelerate pyarrow scipy
 if [ ! -d /content/esm2-fitness-ood ]; then
   git clone https://github.com/wl2116641973-dev/esm2-fitness-ood.git /content/esm2-fitness-ood

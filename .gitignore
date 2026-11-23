@@ -1,0 +1,28 @@
+# Virtual environments & Python caches
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Large data, model weights, embeddings & outputs (keep repo < 30 MB)
+data/
+outputs/
+*.parquet
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.pdb
+*.zip
+*.tar.gz
+
+# OS & editor artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.env

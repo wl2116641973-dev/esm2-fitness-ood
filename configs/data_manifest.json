@@ -1,0 +1,323 @@
+{
+  "proteingym_version": "v1.3",
+  "source_zip": "D:\\Antigravity\\cache\\proteingym\\cv_folds_singles_substitutions.zip",
+  "source_zip_sha256": "920f0be936233b96b5052cd23679e42355cfd2b4e6f45b4f571eb79c0b2f9c35",
+  "oxda_catalytic_pocket_1based_dms": {
+    "Y222": "Y",
+    "Y237": "Y",
+    "R284": "R"
+  },
+  "oxda_activity_expression_shared_mutants": 6387,
+  "panel_10": [
+    {
+      "dms_id": "OXDA_RHOTO_Vanella_2023_activity",
+      "n_rows": 6396,
+      "seq_len": 364,
+      "n_unique_positions": 364,
+      "sha256": "6caae2ff0fa9ea1e2a03bd6b18514df693d9b3f175e75057ac0621e5f4d63f3e",
+      "fold_counts": {
+        "random": [
+          1279,
+          1293,
+          1245,
+          1342,
+          1237
+        ],
+        "modulo": [
+          1285,
+          1284,
+          1289,
+          1280,
+          1258
+        ],
+        "contiguous": [
+          1233,
+          1283,
+          1268,
+          1299,
+          1313
+        ]
+      }
+    },
+    {
+      "dms_id": "ESTA_BACSU_Nutschel_2020",
+      "n_rows": 2172,
+      "seq_len": 212,
+      "n_unique_positions": 168,
+      "sha256": "4841fb44940d808afefc4f19c70145e992159832ca37a607ab4bcf5da2db3681",
+      "fold_counts": {
+        "random": [
+          410,
+          466,
+          448,
+          415,
+          433
+        ],
+        "modulo": [
+          417,
+          470,
+          435,
+          429,
+          421
+        ],
+        "contiguous": [
+          460,
+          516,
+          308,
+          459,
+          429
+        ]
+      }
+    },
+    {
+      "dms_id": "TPMT_HUMAN_Matreyek_2018",
+      "n_rows": 3648,
+      "seq_len": 245,
+      "n_unique_positions": 241,
+      "sha256": "439a44a258e82025ad7e8a3a10c674338aca2370c1f72053366f464641881e15",
+      "fold_counts": {
+        "random": [
+          709,
+          761,
+          708,
+          739,
+          731
+        ],
+        "modulo": [
+          759,
+          715,
+          714,
+          726,
+          734
+        ],
+        "contiguous": [
+          754,
+          728,
+          658,
+          743,
+          765
+        ]
+      }
+    },
+    {
+      "dms_id": "GFP_AEQVI_Sarkisyan_2016",
+      "n_rows": 1084,
+      "seq_len": 238,
+      "n_unique_positions": 233,
+      "sha256": "6fbcc1cba2c164467e90dd15110eafaf8edd6e0e78a0eb13ac6f4da02945c0c3",
+      "fold_counts": {
+        "random": [
+          218,
+          210,
+          206,
+          221,
+          229
+        ],
+        "modulo": [
+          227,
+          211,
+          204,
+          228,
+          214
+        ],
+        "contiguous": [
+          213,
+          197,
+          230,
+          230,
+          214
+        ]
+      }
+    },
+    {
+      "dms_id": "SUMO1_HUMAN_Weile_2017",
+      "n_rows": 1700,
+      "seq_len": 101,
+      "n_unique_positions": 96,
+      "sha256": "8cd2d84866915336153509678c106f6448f0f5fd661c0d938dc376e85ff928bd",
+      "fold_counts": {
+        "random": [
+          355,
+          341,
+          350,
+          334,
+          320
+        ],
+        "modulo": [
+          359,
+          342,
+          334,
+          340,
+          325
+        ],
+        "contiguous": [
+          372,
+          305,
+          341,
+          348,
+          334
+        ]
+      }
+    },
+    {
+      "dms_id": "CALM1_HUMAN_Weile_2017",
+      "n_rows": 1813,
+      "seq_len": 149,
+      "n_unique_positions": 148,
+      "sha256": "ed1233b009c1e0fffc0dc82808caff8483bafdf110ae2517ffa824a014c2a476",
+      "fold_counts": {
+        "random": [
+          370,
+          368,
+          376,
+          353,
+          346
+        ],
+        "modulo": [
+          349,
+          376,
+          354,
+          378,
+          356
+        ],
+        "contiguous": [
+          371,
+          380,
+          389,
+          342,
+          331
+        ]
+      }
+    },
+    {
+      "dms_id": "PHOT_CHLRE_Chen_2023",
+      "n_rows": 2122,
+      "seq_len": 118,
+      "n_unique_positions": 118,
+      "sha256": "4749198b6a83ee79302a49fd6b368c18b54623dcecd5768269760d02a08e4267",
+      "fold_counts": {
+        "random": [
+          431,
+          415,
+          405,
+          439,
+          432
+        ],
+        "modulo": [
+          431,
+          424,
+          431,
+          415,
+          421
+        ],
+        "contiguous": [
+          439,
+          425,
+          446,
+          410,
+          402
+        ]
+      }
+    },
+    {
+      "dms_id": "VILI_CHICK_Tsuboyama_2023_1YU5",
+      "n_rows": 1202,
+      "seq_len": 65,
+      "n_unique_positions": 65,
+      "sha256": "62fd099a44442b7bf36d4811171896b80f0e0a121664645eec59f601952a2f15",
+      "fold_counts": {
+        "random": [
+          214,
+          214,
+          252,
+          265,
+          257
+        ],
+        "modulo": [
+          240,
+          238,
+          240,
+          246,
+          238
+        ],
+        "contiguous": [
+          241,
+          247,
+          240,
+          228,
+          246
+        ]
+      }
+    },
+    {
+      "dms_id": "CATR_CHLRE_Tsuboyama_2023_2AMI",
+      "n_rows": 1340,
+      "seq_len": 72,
+      "n_unique_positions": 72,
+      "sha256": "18e03ef43f12abfb30a77c69b101745dd0c14113dffa98b342b343295f10587c",
+      "fold_counts": {
+        "random": [
+          256,
+          271,
+          251,
+          282,
+          280
+        ],
+        "modulo": [
+          275,
+          282,
+          263,
+          263,
+          257
+        ],
+        "contiguous": [
+          283,
+          277,
+          259,
+          265,
+          256
+        ]
+      }
+    },
+    {
+      "dms_id": "KCNE1_HUMAN_Muhammad_2023_expression",
+      "n_rows": 2339,
+      "seq_len": 129,
+      "n_unique_positions": 127,
+      "sha256": "262bc793c9fb815cff855f44ef33685bef7b4440079eb274138733bb44325fe5",
+      "fold_counts": {
+        "random": [
+          431,
+          444,
+          483,
+          487,
+          494
+        ],
+        "modulo": [
+          483,
+          460,
+          470,
+          460,
+          466
+        ],
+        "contiguous": [
+          487,
+          479,
+          472,
+          473,
+          428
+        ]
+      }
+    }
+  ],
+  "auxiliary": {
+    "OXDA_RHOTO_Vanella_2023_expression": {
+      "n_rows": 6769,
+      "sha256": "325ce818cc29e632223c0f939929bfae21ee84f259952865eb4a96d89775ad7e"
+    },
+    "CASP3_HUMAN_Roychowdhury_2020": {
+      "n_rows": 1567,
+      "sha256": "c45057634da6eb85b3578a91fb1cd81cf4f407cb569260212efa90dc7078c738"
+    }
+  }
+}

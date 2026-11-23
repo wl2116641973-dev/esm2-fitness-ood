@@ -1,0 +1,67 @@
+{
+  "panel_name": "esm2_fitness_ood_10_proteins",
+  "version": "v3.1",
+  "total_expected_single_mutants": 23816,
+  "proteins": [
+    {
+      "dms_id": "OXDA_RHOTO_Vanella_2023_activity",
+      "expected_single_mutants": 6396,
+      "tiers": ["main", "enzyme_case", "learning_curve", "3b_exploration"],
+      "notes": "364 aa (P80324 2-365); catalytic pocket Y222/Y237/R284; PDB 1C0P (1.20 A)"
+    },
+    {
+      "dms_id": "ESTA_BACSU_Nutschel_2020",
+      "expected_single_mutants": 2172,
+      "tiers": ["main", "learning_curve", "3b_exploration"],
+      "notes": "Bacillus subtilis esterase T50 thermostability"
+    },
+    {
+      "dms_id": "TPMT_HUMAN_Matreyek_2018",
+      "expected_single_mutants": 3648,
+      "tiers": ["main", "learning_curve", "3b_exploration"],
+      "notes": "Human TPMT abundance/expression (VAMP-seq)"
+    },
+    {
+      "dms_id": "GFP_AEQVI_Sarkisyan_2016",
+      "expected_single_mutants": 1084,
+      "tiers": ["main", "3b_exploration", "day1_smoke"],
+      "notes": "238 aa GFP fluorescence"
+    },
+    {
+      "dms_id": "SUMO1_HUMAN_Weile_2017",
+      "expected_single_mutants": 1700,
+      "tiers": ["main", "3b_exploration"],
+      "notes": "Human SUMO1 functional fitness/interaction"
+    },
+    {
+      "dms_id": "CALM1_HUMAN_Weile_2017",
+      "expected_single_mutants": 1813,
+      "tiers": ["main"],
+      "notes": "Human calmodulin"
+    },
+    {
+      "dms_id": "PHOT_CHLRE_Chen_2023",
+      "expected_single_mutants": 2122,
+      "tiers": ["main"],
+      "notes": "Phototropin fluorescence"
+    },
+    {
+      "dms_id": "VILI_CHICK_Tsuboyama_2023_1YU5",
+      "expected_single_mutants": 1202,
+      "tiers": ["main"],
+      "notes": "MegaScale folding stability"
+    },
+    {
+      "dms_id": "CATR_CHLRE_Tsuboyama_2023_2AMI",
+      "expected_single_mutants": 1340,
+      "tiers": ["main"],
+      "notes": "MegaScale folding stability"
+    },
+    {
+      "dms_id": "KCNE1_HUMAN_Muhammad_2023_expression",
+      "expected_single_mutants": 2339,
+      "tiers": ["main"],
+      "notes": "Human transmembrane channel expression"
+    }
+  ]
+}

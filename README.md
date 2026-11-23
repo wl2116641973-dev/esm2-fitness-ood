@@ -14,6 +14,6 @@
 - `src/esm2_ood/`: 核心数据处理、防泄露切分校验、基线与统计评估模块
 - `tests/`: 自动化防泄露门禁测试（`pytest`）
 - `configs/`: 10 蛋白锁定面板与实验超参配置
-- `docs/`: 项目最终定稿方案（`PROJECT_PLAN_v3.1.md`）、ADR 决策日志与答辩资料
+- `docs/`: 项目最终定稿方案（`PROJECT_PLAN_v3.1.md`）、Colab CLI 防白烧硬规则（`COLAB_CLI_SAFETY.md`）、ADR 决策日志与答辩资料
 - `notebooks/`: Colab 5-Cell 无状态执行入口
 - `scripts/`: 复算、分析与 300 dpi 绘图脚本

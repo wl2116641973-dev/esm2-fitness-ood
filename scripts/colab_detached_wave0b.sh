@@ -11,8 +11,16 @@ OUT_LOCAL_DIR="/mnt/d/Antigravity/projects/esm2-fitness-ood/outputs/wave0b"
 mkdir -p "$OUT_LOCAL_DIR"
 
 cleanup() {
-  echo "=== [Cleanup] Unconditionally stopping session '$SESSION' ==="
+  echo "=== [Cleanup] Unconditionally stopping session '$SESSION' & sweeping any orphans ==="
   timeout 30 "$COLAB" --auth=oauth2 stop -s "$SESSION" || true
+  timeout 30 /home/eva/.local/share/uv/tools/google-colab-cli/bin/python - <<'PYEOF' || true
+from colab_cli.auth import AuthProvider
+from colab_cli.common import state
+state.auth_provider = AuthProvider.OAUTH2
+for a in state.client.list_assignments():
+    print(f"[Sweep] Unassigning server assignment: {a.endpoint} ({a.accelerator})")
+    state.client.unassign(a.endpoint)
+PYEOF
   sleep 2
   echo "=== [Cleanup] Post-flight session & CU verification ==="
   timeout 30 "$COLAB" --auth=oauth2 sessions || true
@@ -24,8 +32,8 @@ echo "=== [0/5] Pre-flight check (no orphan sessions & starting CU) ==="
 timeout 30 "$COLAB" --auth=oauth2 sessions
 timeout 30 "$COLAB" --auth=oauth2 usage
 
-echo "=== [1/5] Provisioning $GPU_TYPE session '$SESSION' ==="
-timeout 60 "$COLAB" --auth=oauth2 new -s "$SESSION" --gpu "$GPU_TYPE"
+echo "=== [1/5] Provisioning $GPU_TYPE session '$SESSION' (timeout=180s) ==="
+timeout 180 "$COLAB" --auth=oauth2 new -s "$SESSION" --gpu "$GPU_TYPE"
 sleep 4
 
 echo "=== [2/5] Warm-check GPU & kernel responsiveness (max 3 attempts) ==="

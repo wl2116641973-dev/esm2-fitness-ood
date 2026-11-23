@@ -17,7 +17,8 @@
 4. **开机前先清孤儿、开机后 3 秒热机门禁**
    - 开机前先跑 `colab sessions` 确认没有残留会话；
    - `colab new` 成功后等待 `3` 秒，先跑一条 `nvidia-smi` 短探测（最多重试 3 次），不通则立刻 `colab stop` 退出，绝不带病挂机。
-5. **关机后必须双核验（`Active assignments: 0`）与记账**
-   - 每次 `EXIT` trap 必须执行 `timeout 30 colab stop -s <name>` 并紧接 `colab sessions` + `colab usage`，核实 `Active assignments: 0` 与 `Usage rate: 0.00/hr`，记录 `CU_before -> CU_after`。
+5. **关机后必须双核验与服务端孤儿清扫（`Active assignments: 0`）**
+   - `colab new` 分配 GPU 允许最高 `timeout 180`（避免 60s 超时斩断本地 `sessions.json` 写入从而产生 `[?]` 孤儿实例）。
+   - 每次 `EXIT` trap 除执行 `timeout 30 colab stop -s <name>` 外，**必须再调用 `state.client.list_assignments()` + `unassign(a.endpoint)` 强清服务端全部残余实例**，随后用 `colab sessions` + `colab usage` 核实 `Active assignments: 0` 与 `Usage rate: 0.00/hr`，记录 `CU_before -> CU_after`。
 6. **分批断点续跑（禁止单次大包一把梭）**
    - 正式 Wave 1–3 任务必须按蛋白/切分拆小批（每批预估 15–35 分钟），每完成一折立即落盘，即使中途触顶时间上限或网络中断也可无缝续跑。

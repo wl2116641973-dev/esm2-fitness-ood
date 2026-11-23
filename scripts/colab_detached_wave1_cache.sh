@@ -161,11 +161,12 @@ while true; do
 done
 
 echo "=== [5/5] Retrieving artifacts (STATUS=$STATUS) ==="
-timeout 90 "$COLAB" --auth=oauth2 files download -s "$SESSION" /content/work/wave1_cache/job.log "$OUT_LOCAL_DIR/wave1_cache_job.log" || true
+timeout 90 "$COLAB" --auth=oauth2 download -s "$SESSION" /content/work/wave1_cache/job.log "$OUT_LOCAL_DIR/wave1_cache_job.log" || true
 if [ "$STATUS" = "DONE" ]; then
-  timeout 120 "$COLAB" --auth=oauth2 files download -s "$SESSION" /content/work/wave1_cache_outputs.tar.gz "$OUT_LOCAL_DIR/wave1_cache_outputs.tar.gz"
+  timeout 120 "$COLAB" --auth=oauth2 download -s "$SESSION" /content/work/wave1_cache_outputs.tar.gz "$OUT_LOCAL_DIR/wave1_cache_outputs.tar.gz"
   tar -xzf "$OUT_LOCAL_DIR/wave1_cache_outputs.tar.gz" -C "$OUT_LOCAL_DIR"
   rm -f "$OUT_LOCAL_DIR/wave1_cache_outputs.tar.gz"
+  ls -lh "$OUT_LOCAL_DIR"
   echo "[Success] Wave 1 cache artifacts extracted to $OUT_LOCAL_DIR"
 else
   echo "[Error] Job did not finish cleanly (STATUS=$STATUS). Check $OUT_LOCAL_DIR/wave1_cache_job.log"

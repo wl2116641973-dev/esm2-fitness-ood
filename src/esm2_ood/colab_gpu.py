@@ -156,7 +156,7 @@ def train_eval_esm2_lora_llr(
     """
     import torch
     import torch.nn.functional as F
-    from peft import LoraConfig, TaskType, get_peft_model
+    from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForMaskedLM, AutoTokenizer
 
     t0 = time.perf_counter()
@@ -171,7 +171,6 @@ def train_eval_esm2_lora_llr(
     )
 
     lora_cfg = LoraConfig(
-        task_type=TaskType.FEATURE_EXTRACTION,
         r=lora_rank,
         lora_alpha=lora_alpha,
         lora_dropout=0.05,

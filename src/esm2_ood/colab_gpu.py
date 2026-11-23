@@ -135,6 +135,24 @@ def extract_frozen_diff_embeddings(
     return diffs
 
 
+def _fit_ols_affine(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+    """Fit closed-form 1D OLS `y ≈ slope * x + intercept` with zero-variance guard."""
+    x_arr = np.asarray(x, dtype=np.float64)
+    y_arr = np.asarray(y, dtype=np.float64)
+    if len(x_arr) < 2:
+        return 1.0, 0.0
+    x_mean = float(np.mean(x_arr))
+    y_mean = float(np.mean(y_arr))
+    dx = x_arr - x_mean
+    var_x = float(np.mean(dx * dx))
+    if var_x <= 1e-12:
+        return 1.0, 0.0
+    cov_xy = float(np.mean(dx * (y_arr - y_mean)))
+    slope = cov_xy / var_x
+    intercept = y_mean - slope * x_mean
+    return float(slope), float(intercept)
+
+
 def train_eval_esm2_lora_llr(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
@@ -150,9 +168,11 @@ def train_eval_esm2_lora_llr(
     seed: int = 42,
     device: str = "cuda",
 ) -> dict[str, Any]:
-    """Fine-tune ESM-2 with LoRA on (q_proj, v_proj) using LoRA-LLR readout (masked lm_head).
+    """Fine-tune ESM-2 with LoRA on (query, value) using LoRA-LLR readout (masked lm_head).
 
-    Every fold initializes a fresh PeftModel from scratch; no adapter state leaks across folds.
+    Initializes (scale_param, bias_param) via train-only closed-form OLS on epoch-0 LLR
+    before LoRA optimization so MSE starts calibrated. Every fold initializes a fresh
+    PeftModel from scratch; no adapter state leaks across folds.
     """
     import torch
     import torch.nn.functional as F
@@ -182,6 +202,7 @@ def train_eval_esm2_lora_llr(
     y_tr_raw = train_df["DMS_score"].to_numpy(dtype=np.float64)
     y_mean = float(np.mean(y_tr_raw))
     y_std = float(np.std(y_tr_raw)) or 1.0
+    y_tr_norm = (y_tr_raw - y_mean) / y_std
 
     # Affine calibration parameters on top of LLR for MSE alignment
     scale_param = torch.nn.Parameter(torch.tensor(1.0, device=device))
@@ -198,9 +219,9 @@ def train_eval_esm2_lora_llr(
     wt_mask_base = wt_enc["attention_mask"][0]
     mask_token_id = tokenizer.mask_token_id
 
-    def _predict_df(sub_df: pd.DataFrame) -> np.ndarray:
+    def _compute_raw_llr(sub_df: pd.DataFrame) -> np.ndarray:
         model.eval()
-        preds = np.zeros(len(sub_df), dtype=np.float64)
+        llrs = np.zeros(len(sub_df), dtype=np.float64)
         uniq_pos = sorted({int(p) for p in sub_df["pos"]})
         pos_lp = {}
         with torch.no_grad():
@@ -214,19 +235,29 @@ def train_eval_esm2_lora_llr(
                 for idx_b, p in enumerate(bp):
                     t_idx = esm2_token_index(p, wt_seq=wt_seq)
                     pos_lp[p] = torch.log_softmax(logits[idx_b, t_idx].float(), dim=-1).cpu()
-        s_val = float(scale_param.detach().cpu())
-        b_val = float(bias_param.detach().cpu())
         for r_i, (wt_a, p, mut_a) in enumerate(zip(sub_df["wt_aa"], sub_df["pos"], sub_df["mut_aa"])):
             lp = pos_lp[int(p)]
-            llr = float(lp[tokenizer.convert_tokens_to_ids(mut_a)] - lp[tokenizer.convert_tokens_to_ids(wt_a)])
-            preds[r_i] = (s_val * llr + b_val) * y_std + y_mean
-        return preds
+            llrs[r_i] = float(lp[tokenizer.convert_tokens_to_ids(mut_a)] - lp[tokenizer.convert_tokens_to_ids(wt_a)])
+        return llrs
+
+    def _predict_df(sub_df: pd.DataFrame) -> np.ndarray:
+        llrs = _compute_raw_llr(sub_df)
+        s_val = float(scale_param.detach().cpu())
+        b_val = float(bias_param.detach().cpu())
+        return (s_val * llrs + b_val) * y_std + y_mean
+
+    # Epoch-0 train-only closed-form OLS calibration before LoRA optimization
+    llr_tr0 = _compute_raw_llr(train_df)
+    s0, b0 = _fit_ols_affine(llr_tr0, y_tr_norm)
+    with torch.no_grad():
+        scale_param.fill_(s0)
+        bias_param.fill_(b0)
 
     best_val_rho = -float("inf")
     best_state: dict[str, Any] | None = None
     no_improve = 0
 
-    tr_rows = list(zip(train_df["wt_aa"], train_df["pos"], train_df["mut_aa"], (y_tr_raw - y_mean) / y_std))
+    tr_rows = list(zip(train_df["wt_aa"], train_df["pos"], train_df["mut_aa"], y_tr_norm))
     rng = np.random.default_rng(seed)
 
     for epoch in range(1, max_epochs + 1):
@@ -293,6 +324,173 @@ def train_eval_esm2_lora_llr(
     test_mse = compute_mse(test_df["DMS_score"].to_numpy(), test_pred)
 
     del model, base_model
+    if device.startswith("cuda"):
+        torch.cuda.empty_cache()
+
+    return {
+        "test_pred": test_pred,
+        "test_spearman": test_rho,
+        "test_mse": test_mse,
+        "best_val_spearman": best_val_rho,
+        "best_epoch": best_state["best_epoch"] if best_state else 0,
+        "elapsed_sec": elapsed_sec,
+    }
+
+
+def train_eval_esm2_lora_linear_head(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    wt_seq: str,
+    model_name_or_size: str = "650M",
+    lora_rank: int = 8,
+    lora_alpha: int = 16,
+    lr: float = 1e-4,
+    max_epochs: int = 12,
+    patience: int = 3,
+    batch_size: int = 8,
+    seed: int = 42,
+    device: str = "cuda",
+) -> dict[str, Any]:
+    """Fine-tune ESM-2 with LoRA on (query, value) using a linear head on site-diff features.
+
+    Isomorphic to FrozenDiffRidgeBaseline: uses `h_mut[pos] - h_wt[pos]` from the last
+    hidden state followed by a linear projection head. Every fold initializes a fresh
+    PeftModel and linear head from scratch.
+    """
+    import torch
+    import torch.nn.functional as F
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoModel, AutoTokenizer
+
+    t0 = time.perf_counter()
+    torch.manual_seed(seed)
+    if device.startswith("cuda"):
+        torch.cuda.manual_seed_all(seed)
+
+    model_id = MODEL_IDS.get(model_name_or_size, model_name_or_size)
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    base_model = AutoModel.from_pretrained(
+        model_id, torch_dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32
+    )
+
+    lora_cfg = LoraConfig(
+        r=lora_rank,
+        lora_alpha=lora_alpha,
+        lora_dropout=0.05,
+        target_modules=["query", "value"],
+    )
+    model = get_peft_model(base_model, lora_cfg).to(device)
+    hidden_dim = int(base_model.config.hidden_size)
+    head = torch.nn.Linear(hidden_dim, 1).to(device)
+
+    y_tr_raw = train_df["DMS_score"].to_numpy(dtype=np.float64)
+    y_mean = float(np.mean(y_tr_raw))
+    y_std = float(np.std(y_tr_raw)) or 1.0
+    y_tr_norm = (y_tr_raw - y_mean) / y_std
+
+    optimizer = torch.optim.AdamW(
+        [p for p in model.parameters() if p.requires_grad] + list(head.parameters()),
+        lr=lr,
+        weight_decay=1e-2,
+    )
+
+    wt_enc = tokenizer(wt_seq, return_tensors="pt", add_special_tokens=True)
+    wt_ids = wt_enc["input_ids"].to(device)
+    wt_mask = wt_enc["attention_mask"].to(device)
+
+    def _predict_df(sub_df: pd.DataFrame) -> np.ndarray:
+        model.eval()
+        head.eval()
+        preds = np.zeros(len(sub_df), dtype=np.float64)
+        mut_seqs = sub_df["mutated_sequence"].tolist()
+        positions = sub_df["pos"].tolist()
+        wt_aas = sub_df["wt_aa"].tolist()
+        with torch.no_grad():
+            wt_hidden = model(input_ids=wt_ids, attention_mask=wt_mask).last_hidden_state[0].float()
+            for s in range(0, len(sub_df), batch_size * 2):
+                b_seqs = mut_seqs[s : s + batch_size * 2]
+                b_pos = positions[s : s + batch_size * 2]
+                b_wt = wt_aas[s : s + batch_size * 2]
+                enc = tokenizer(b_seqs, return_tensors="pt", padding=False, add_special_tokens=True)
+                b_ids = enc["input_ids"].to(device)
+                b_mask = enc["attention_mask"].to(device)
+                out = model(input_ids=b_ids, attention_mask=b_mask).last_hidden_state.float()
+                diffs = []
+                for i, (pos, wt_aa) in enumerate(zip(b_pos, b_wt)):
+                    t_idx = esm2_token_index(int(pos), wt_seq=wt_seq, expected_wt=wt_aa)
+                    diffs.append(out[i, t_idx] - wt_hidden[t_idx])
+                diff_tensor = torch.stack(diffs)
+                y_norm = head(diff_tensor).squeeze(-1).cpu().numpy()
+                preds[s : s + len(b_seqs)] = y_norm * y_std + y_mean
+        return preds
+
+    best_val_rho = -float("inf")
+    best_state: dict[str, Any] | None = None
+    no_improve = 0
+
+    tr_rows = list(zip(train_df["mutated_sequence"], train_df["wt_aa"], train_df["pos"], y_tr_norm))
+    rng = np.random.default_rng(seed)
+
+    for epoch in range(1, max_epochs + 1):
+        model.train()
+        head.train()
+        perm = rng.permutation(len(tr_rows))
+        for s in range(0, len(perm), batch_size):
+            batch_idx = perm[s : s + batch_size]
+            b_seqs = [tr_rows[int(i)][0] for i in batch_idx]
+            b_wt = [tr_rows[int(i)][1] for i in batch_idx]
+            b_pos = [tr_rows[int(i)][2] for i in batch_idx]
+            targets = [tr_rows[int(i)][3] for i in batch_idx]
+
+            wt_hidden = model(input_ids=wt_ids, attention_mask=wt_mask).last_hidden_state[0].float()
+            enc = tokenizer(b_seqs, return_tensors="pt", padding=False, add_special_tokens=True)
+            b_ids = enc["input_ids"].to(device)
+            b_mask = enc["attention_mask"].to(device)
+            out = model(input_ids=b_ids, attention_mask=b_mask).last_hidden_state.float()
+
+            diffs = []
+            for i, (pos, wt_aa) in enumerate(zip(b_pos, b_wt)):
+                t_idx = esm2_token_index(int(pos), wt_seq=wt_seq, expected_wt=wt_aa)
+                diffs.append(out[i, t_idx] - wt_hidden[t_idx])
+            diff_tensor = torch.stack(diffs)
+            y_pred_norm = head(diff_tensor).squeeze(-1)
+            y_tgt = torch.tensor(targets, dtype=torch.float32, device=device)
+            loss = F.mse_loss(y_pred_norm, y_tgt)
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                [p for p in model.parameters() if p.requires_grad] + list(head.parameters()), 1.0
+            )
+            optimizer.step()
+
+        val_pred = _predict_df(val_df)
+        val_rho = compute_spearman(val_df["DMS_score"].to_numpy(), val_pred)
+        val_score = val_rho if val_rho is not None else -float("inf")
+        if val_score > best_val_rho:
+            best_val_rho = val_score
+            best_state = {
+                "lora": {k: v.detach().cpu().clone() for k, v in model.state_dict().items() if "lora_" in k},
+                "head": {k: v.detach().cpu().clone() for k, v in head.state_dict().items()},
+                "best_epoch": epoch,
+            }
+            no_improve = 0
+        else:
+            no_improve += 1
+            if no_improve >= patience:
+                break
+
+    if best_state is not None:
+        model.load_state_dict(best_state["lora"], strict=False)
+        head.load_state_dict(best_state["head"])
+
+    test_pred = _predict_df(test_df)
+    elapsed_sec = time.perf_counter() - t0
+    test_rho = compute_spearman(test_df["DMS_score"].to_numpy(), test_pred)
+    test_mse = compute_mse(test_df["DMS_score"].to_numpy(), test_pred)
+
+    del model, base_model, head
     if device.startswith("cuda"):
         torch.cuda.empty_cache()
 
